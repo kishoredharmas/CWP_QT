@@ -9,10 +9,14 @@
 
 #include "application/use_cases/DisplayTrackUseCase.hpp"
 #include "application/use_cases/MonitorStaleTracksUseCase.hpp"
+#include "domain/interfaces/IPlaybackService.hpp"
 #include "domain/interfaces/ITrackPresenter.hpp"
 
 namespace cwp::ui {
 
+class FlightListView;
+class FlightStripView;
+class PlaybackView;
 class RadarView;
 
 /**
@@ -41,6 +45,7 @@ public:
     explicit MainWindow(
         std::shared_ptr<application::DisplayTrackUseCase>       displayUseCase,
         std::shared_ptr<application::MonitorStaleTracksUseCase> staleMonitorUseCase,
+        std::shared_ptr<domain::IPlaybackService>               playbackService,
         QWidget* parent = nullptr);
 
     ~MainWindow() override = default;
@@ -58,8 +63,14 @@ private:
 
     std::shared_ptr<application::DisplayTrackUseCase>       m_displayUseCase;
     std::shared_ptr<application::MonitorStaleTracksUseCase> m_staleMonitorUseCase;
-    RadarView*                                              m_radarView{nullptr};
-    QTimer                                                  m_refreshTimer;
+    std::shared_ptr<domain::IPlaybackService>               m_playbackService;
+
+    RadarView*        m_radarView{nullptr};
+    FlightStripView*  m_stripView{nullptr};
+    FlightListView*   m_listView{nullptr};
+    PlaybackView*     m_playbackView{nullptr};
+
+    QTimer            m_refreshTimer;
 
     void setupUi();
 };

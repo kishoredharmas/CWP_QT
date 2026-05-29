@@ -45,6 +45,9 @@ add_executable(cwp_qt
     main.cpp
     ui/MainWindow.cpp
     ui/RadarView.cpp
+    ui/FlightStripView.cpp
+    ui/FlightListView.cpp
+    ui/PlaybackView.cpp
 )
 target_link_libraries(cwp_qt PRIVATE
     domain_lib

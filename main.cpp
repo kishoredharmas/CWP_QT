@@ -1,7 +1,10 @@
 #include <QApplication>
+#include <QTimer>
 
 #include <chrono>
+#include <cmath>
 #include <memory>
+#include <numbers>
 
 #include "application/use_cases/DisplayTrackUseCase.hpp"
 #include "application/use_cases/MonitorStaleTracksUseCase.hpp"
@@ -9,10 +12,48 @@
 #include "domain/interfaces/ITrackRepository.hpp"
 #include "domain/value_objects/Position.hpp"
 #include "domain/value_objects/Velocity.hpp"
+#include "infrastructure/playback/FilePlaybackService.hpp"
 #include "infrastructure/repositories/FileTrackRepository.hpp"
 #include "ui/MainWindow.hpp"
 
 namespace {
+
+/// Knots → degrees of latitude per second (1 kt ≈ 1.852 km/h).
+/// At the equator 1° lat ≈ 111.12 km; good enough for a demo approximation.
+constexpr double k_ktToDegreesPerSec = 1.852 / (111.12 * 3600.0);
+
+/// Advance every track in the repository by `dtSeconds` along its heading,
+/// and reset its timestamp to `now` — simulating a new surveillance return.
+void advanceTracks(cwp::domain::ITrackRepository& repo, double dtSeconds)
+{
+    using namespace cwp::domain;
+    const auto now = std::chrono::system_clock::now();
+
+    for (const auto& track : repo.findAll()) {
+        const double headingRad =
+            track->velocity().heading() * std::numbers::pi / 180.0;
+
+        const double dLat = std::cos(headingRad) * track->velocity().speed()
+                            * k_ktToDegreesPerSec * dtSeconds;
+        const double dLon = std::sin(headingRad) * track->velocity().speed()
+                            * k_ktToDegreesPerSec * dtSeconds
+                            / std::cos(track->position().latitude()
+                                       * std::numbers::pi / 180.0);
+
+        const double newLat = track->position().latitude()  + dLat;
+        const double newLon = track->position().longitude() + dLon;
+        const int    alt    = track->position().altitude();
+
+        // Clamp to valid domain bounds before updating.
+        if (newLat < Position::k_minLatitude  || newLat > Position::k_maxLatitude  ||
+            newLon < Position::k_minLongitude || newLon > Position::k_maxLongitude) {
+            continue; // Track has left displayable area — leave it to stale-eviction.
+        }
+
+        track->update(Position{newLat, newLon, alt}, track->velocity(), now);
+        repo.save(track);
+    }
+}
 
 /// Seed the repository with representative demo tracks so the radar
 /// displays activity on first launch (until live surveillance data is wired).
@@ -23,7 +64,6 @@ void seedDemoTracks(cwp::domain::ITrackRepository& repo)
 
     const auto now = system_clock::now();
 
-    // Aircraft in the London TMA area (lat ~51.5, lon ~0.0)
     struct Seed {
         std::uint32_t id;
         double lat, lon;
@@ -74,6 +114,8 @@ int main(int argc, char* argv[])
     // ── Infrastructure ───────────────────────────────────────────────────────
     auto trackRepository =
         std::make_shared<cwp::infrastructure::FileTrackRepository>("cwp_tracks.json");
+    auto playbackService =
+        std::make_shared<cwp::infrastructure::FilePlaybackService>();
 
     // Seed demo tracks so the radar has visible targets on first launch.
     seedDemoTracks(*trackRepository);
@@ -89,7 +131,7 @@ int main(int argc, char* argv[])
             trackRepository, /*presenter=*/nullptr);
 
     // ── Presentation ────────────────────────────────────────────────────────
-    cwp::ui::MainWindow mainWindow{displayUseCase, staleMonitorUseCase};
+    cwp::ui::MainWindow mainWindow{displayUseCase, staleMonitorUseCase, playbackService};
 
     // Resolve circular dependency: MainWindow IS the presenter.
     // The no-op deleter prevents a double-free; mainWindow is stack-owned.
@@ -102,6 +144,19 @@ int main(int argc, char* argv[])
     staleMonitorUseCase->setPresenter(presenterHandle);
 
     mainWindow.show();
+
+    // ── Simulation feed ──────────────────────────────────────────────────────
+    // Advances each demo track along its heading every 4 seconds and resets
+    // its timestamp, mimicking a real surveillance return. Without this the
+    // MonitorStaleTracksUseCase (correctly) evicts tracks after 60 s.
+    constexpr int    k_simIntervalMs = 4000;
+    constexpr double k_simIntervalS  = k_simIntervalMs / 1000.0;
+    QTimer simTimer;
+    QObject::connect(&simTimer, &QTimer::timeout, [&] {
+        advanceTracks(*trackRepository, k_simIntervalS);
+    });
+    simTimer.start(k_simIntervalMs);
+
     return app.exec();
 }
 

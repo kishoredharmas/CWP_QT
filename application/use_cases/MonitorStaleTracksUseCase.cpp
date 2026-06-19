@@ -1,5 +1,6 @@
 #include "application/use_cases/MonitorStaleTracksUseCase.hpp"
 
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -12,7 +13,11 @@ MonitorStaleTracksUseCase::MonitorStaleTracksUseCase(
     : m_repository{std::move(repository)}
     , m_presenter{std::move(presenter)}
     , m_threshold{threshold}
-{}
+{
+    if (!m_repository) {
+        throw std::invalid_argument("MonitorStaleTracksUseCase: repository must not be null");
+    }
+}
 
 std::size_t
 MonitorStaleTracksUseCase::execute(std::chrono::system_clock::time_point now)

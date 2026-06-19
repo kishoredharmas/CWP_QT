@@ -66,4 +66,14 @@ bool Track::isStale(std::chrono::seconds              threshold,
     return age(now) >= threshold;
 }
 
+bool Track::isInsideSector() const noexcept
+{
+    return m_insideSector;
+}
+
+void Track::setInsideSector(bool inside) noexcept
+{
+    m_insideSector = inside;
+}
+
 } // namespace cwp::domain

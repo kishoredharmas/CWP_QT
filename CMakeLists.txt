@@ -28,7 +28,11 @@ target_compile_options(domain_lib PRIVATE -Wall -Wextra -Wpedantic)
 # ── Application library ──────────────────────────────────────────────────────
 add_library(application_lib STATIC
     application/use_cases/DisplayTrackUseCase.cpp
-    application/use_cases/AssociateFlightPlanUseCase.cpp    application/use_cases/MonitorStaleTracksUseCase.cpp)
+    application/use_cases/AssociateFlightPlanUseCase.cpp
+    application/use_cases/MonitorStaleTracksUseCase.cpp
+    application/use_cases/SeedDemoTracksUseCase.cpp
+    application/use_cases/SimulateTrackMovementUseCase.cpp
+)
 target_link_libraries(application_lib PUBLIC domain_lib)
 target_compile_options(application_lib PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -36,6 +40,7 @@ target_compile_options(application_lib PRIVATE -Wall -Wextra -Wpedantic)
 add_library(infrastructure_lib STATIC
     infrastructure/repositories/FileTrackRepository.cpp
     infrastructure/playback/FilePlaybackService.cpp
+    infrastructure/services/PolygonSectorBoundaryService.cpp
 )
 target_link_libraries(infrastructure_lib PUBLIC domain_lib Qt6::Core)
 target_compile_options(infrastructure_lib PRIVATE -Wall -Wextra -Wpedantic)

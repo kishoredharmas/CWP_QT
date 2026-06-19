@@ -10,6 +10,10 @@ namespace cwp::infrastructure {
 FileTrackRepository::FileTrackRepository(const std::string& filePath)
     : m_filePath{filePath}
 {
+    if (filePath.empty()) {
+        // Non-fatal: operate in memory-only mode
+        return;
+    }
     loadFromFile(); // called before threads start — no lock needed.
 }
 

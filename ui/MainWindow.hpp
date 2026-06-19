@@ -59,7 +59,7 @@ private slots:
     void onRefreshTimer();
 
 private:
-    static constexpr int k_refreshIntervalMs{4000}; ///< Matches radar rotation period.
+    static constexpr int k_refreshIntervalMs{1000}; ///< Update every second.
 
     std::shared_ptr<application::DisplayTrackUseCase>       m_displayUseCase;
     std::shared_ptr<application::MonitorStaleTracksUseCase> m_staleMonitorUseCase;

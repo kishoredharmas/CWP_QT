@@ -26,6 +26,9 @@ MainWindow::MainWindow(
     setupUi();
     connect(&m_refreshTimer, &QTimer::timeout, this, &MainWindow::onRefreshTimer);
     m_refreshTimer.start(k_refreshIntervalMs);
+    
+    // Trigger immediate display
+    onRefreshTimer();
 }
 
 void MainWindow::setupUi()

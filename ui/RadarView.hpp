@@ -1,5 +1,7 @@
 #pragma once
 
+#include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -13,18 +15,16 @@
 namespace cwp::ui {
 
 /**
- * @brief Custom widget that renders the radar plan-view display.
- *
- * Paints all active tracks as cross symbols with associated data labels
- * using QPainter. Geographic coordinates are mapped to screen space via
- * a simple equirectangular projection centred on a configurable origin.
+ * @brief Realistic ATC radar display with sector boundaries and aircraft trails.
  *
  * Features:
- *  - Each track is rendered in a distinct colour from a fixed ATC palette.
- *  - Hovering over a track symbol shows an enlarged tooltip label with full
- *    details (callsign, FL, speed, heading, lat/lon) so data never overlaps.
- *
- * This widget is purely presentational; it holds no business logic.
+ *  - Dark-themed background simulating a real radar scope
+ *  - Irregular sector polygon (control airspace boundary)
+ *  - Air route lines overlaid on the display
+ *  - Aircraft rendered as white dots with green velocity vectors
+ *  - Dotted white trails showing aircraft history
+ *  - Green labels with callsign and flight level
+ *  - Minimalist, radar-authentic styling
  */
 class RadarView final : public QWidget {
     Q_OBJECT
@@ -42,30 +42,46 @@ protected:
 
 private:
     // ── Layout constants ──────────────────────────────────────────────────────
-    static constexpr double k_centerLat    {51.5};  ///< Display centre latitude (°).
-    static constexpr double k_centerLon    { 0.0};  ///< Display centre longitude (°).
-    static constexpr double k_scalePixPerDeg{40.0}; ///< Pixels per degree of arc.
-    static constexpr int    k_rangeRingCount{5};    ///< Number of range rings.
-    static constexpr int    k_symbolHalfSize{6};    ///< Half-size of cross symbol (px).
-    static constexpr double k_hoverRadiusPx{18.0};  ///< Pixel radius for hover hit-test.
+    static constexpr double k_centerLat     {51.5};   ///< Display centre latitude (°).
+    static constexpr double k_centerLon     { 0.0};   ///< Display centre longitude (°).
+    static constexpr double k_scalePixPerDeg{50.0};   ///< Pixels per degree of arc.
+    static constexpr int    k_dotRadius     {3};      ///< Aircraft dot radius (px).
+    static constexpr double k_vectorLength  {40.0};   ///< Velocity vector length (px).
+    static constexpr double k_hoverRadiusPx {20.0};   ///< Pixel radius for hover hit-test.
+    static constexpr int    k_maxTrailPoints{5};      ///< Max trail history per aircraft.
+    static constexpr int    k_trailDotRadius{1};      ///< Trail dot radius (px).
 
-    // ── ATC label colour palette ──────────────────────────────────────────────
-    /// Distinct colours assigned round-robin to tracks in arrival order.
-    static const std::array<QColor, 8> k_trackColours;
+    struct TrailHistory {
+        std::deque<domain::Position> positions;  // Store geographic positions
+    };
 
     std::vector<std::shared_ptr<domain::Track>> m_tracks;
+    std::map<domain::TrackId, TrailHistory>     m_trails;
 
     /// Index of the hovered track in m_tracks, or std::nullopt.
     std::optional<std::size_t> m_hoveredIndex;
 
     [[nodiscard]] QPointF project(const domain::Position& position) const;
-    [[nodiscard]] QColor  colourForIndex(std::size_t index) const;
+    [[nodiscard]] QPointF findNonOverlappingPosition(
+        const QPointF& aircraftPos,
+        const QRectF& labelRect,
+        const std::vector<QRectF>& occupiedRects,
+        double headingRadians) const;
 
-    void drawRangeRings(QPainter& painter) const;
-    void drawTrack(QPainter& painter, const domain::Track& track,
-                   QColor colour, bool hovered) const;
+    void drawBackground(QPainter& painter) const;
+    void drawSector(QPainter& painter) const;
+    void drawRoutes(QPainter& painter) const;
+    void drawTrail(QPainter& painter, const TrailHistory& trail,
+                   bool isInsideSector) const;
+    void drawAircraft(QPainter& painter, const domain::Track& track,
+                      const QPointF& pos, bool hovered) const;
+    void drawLabel(QPainter& painter, const domain::Track& track,
+                   const QPointF& pos, const std::vector<QRectF>& occupiedRects,
+                   std::vector<QRectF>& newOccupiedRects) const;
     void drawHoverTooltip(QPainter& painter, const domain::Track& track,
-                          QPointF screenPos, QColor colour) const;
+                          QPointF screenPos) const;
+
+    void updateTrails();
 };
 
 } // namespace cwp::ui

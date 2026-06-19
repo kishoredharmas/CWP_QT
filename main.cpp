@@ -1,96 +1,46 @@
+/**
+ * @file main.cpp
+ * @brief Application entry point and composition root.
+ *
+ * This file is responsible for:
+ * 1. Creating all infrastructure dependencies (repositories, services)
+ * 2. Wiring application use cases with dependencies (Dependency Injection)
+ * 3. Creating and showing the UI
+ * 4. Breaking circular dependencies (MainWindow implements ITrackPresenter)
+ * 5. Starting simulation timer for demo mode
+ *
+ * Architecture Note:
+ * - This is the ONLY place where concrete types are instantiated
+ * - All other code depends on interfaces (Dependency Inversion Principle)
+ * - No business logic belongs here (orchestration only)
+ *
+ * Safety Note:
+ * - MonitorStaleTracksUseCase runs BEFORE DisplayTrackUseCase to ensure
+ *   stale tracks are evicted before display refresh
+ */
+
 #include <QApplication>
 #include <QTimer>
 
 #include <chrono>
-#include <cmath>
 #include <memory>
-#include <numbers>
 
 #include "application/use_cases/DisplayTrackUseCase.hpp"
 #include "application/use_cases/MonitorStaleTracksUseCase.hpp"
-#include "domain/entities/Track.hpp"
-#include "domain/interfaces/ITrackRepository.hpp"
-#include "domain/value_objects/Position.hpp"
-#include "domain/value_objects/Velocity.hpp"
+#include "application/use_cases/SeedDemoTracksUseCase.hpp"
+#include "application/use_cases/SimulateTrackMovementUseCase.hpp"
 #include "infrastructure/playback/FilePlaybackService.hpp"
 #include "infrastructure/repositories/FileTrackRepository.hpp"
+#include "infrastructure/services/PolygonSectorBoundaryService.hpp"
 #include "ui/MainWindow.hpp"
 
 namespace {
 
-/// Knots → degrees of latitude per second (1 kt ≈ 1.852 km/h).
-/// At the equator 1° lat ≈ 111.12 km; good enough for a demo approximation.
-constexpr double k_ktToDegreesPerSec = 1.852 / (111.12 * 3600.0);
-
-/// Advance every track in the repository by `dtSeconds` along its heading,
-/// and reset its timestamp to `now` — simulating a new surveillance return.
-void advanceTracks(cwp::domain::ITrackRepository& repo, double dtSeconds)
-{
-    using namespace cwp::domain;
-    const auto now = std::chrono::system_clock::now();
-
-    for (const auto& track : repo.findAll()) {
-        const double headingRad =
-            track->velocity().heading() * std::numbers::pi / 180.0;
-
-        const double dLat = std::cos(headingRad) * track->velocity().speed()
-                            * k_ktToDegreesPerSec * dtSeconds;
-        const double dLon = std::sin(headingRad) * track->velocity().speed()
-                            * k_ktToDegreesPerSec * dtSeconds
-                            / std::cos(track->position().latitude()
-                                       * std::numbers::pi / 180.0);
-
-        const double newLat = track->position().latitude()  + dLat;
-        const double newLon = track->position().longitude() + dLon;
-        const int    alt    = track->position().altitude();
-
-        // Clamp to valid domain bounds before updating.
-        if (newLat < Position::k_minLatitude  || newLat > Position::k_maxLatitude  ||
-            newLon < Position::k_minLongitude || newLon > Position::k_maxLongitude) {
-            continue; // Track has left displayable area — leave it to stale-eviction.
-        }
-
-        track->update(Position{newLat, newLon, alt}, track->velocity(), now);
-        repo.save(track);
-    }
-}
-
-/// Seed the repository with representative demo tracks so the radar
-/// displays activity on first launch (until live surveillance data is wired).
-void seedDemoTracks(cwp::domain::ITrackRepository& repo)
-{
-    using namespace cwp::domain;
-    using namespace std::chrono;
-
-    const auto now = system_clock::now();
-
-    struct Seed {
-        std::uint32_t id;
-        double lat, lon;
-        double speedKt, headingDeg;
-        int altFt;
-        const char* callsign;
-    };
-
-    constexpr std::array<Seed, 6> seeds{{
-        {1001,  51.8,  -0.5,  430,  175, 37000, "BAW123"},
-        {1002,  51.2,   0.8,  410,  270, 35000, "EZY456"},
-        {1003,  51.6,  -1.2,  460,   90, 39000, "VIR789"},
-        {1004,  50.9,   0.2,  390,  320, 33000, "TOM101"},
-        {1005,  51.4,   1.0,  440,  210, 36000, "RYR202"},
-        {1006,  51.7,  -0.1,  420,   45, 38000, "DLH303"},
-    }};
-
-    for (const auto& s : seeds) {
-        auto track = std::make_shared<Track>(
-            TrackId{s.id},
-            Position{s.lat, s.lon, s.altFt},
-            Velocity{s.speedKt, s.headingDeg, 0},
-            now);
-        track->associateCallsign(s.callsign);
-        repo.save(std::move(track));
-    }
-}
+/// UK sector boundary definition (matches RadarView display)
+constexpr std::array<std::pair<double, double>, 6> k_sectorVertices{{
+    {47.0, -5.0}, {54.0, -4.0}, {56.0, 4.0},
+    {54.5, 6.0}, {48.0, 5.0}, {46.0, -3.0}
+}};
 
 } // namespace
 
@@ -116,12 +66,18 @@ int main(int argc, char* argv[])
         std::make_shared<cwp::infrastructure::FileTrackRepository>("cwp_tracks.json");
     auto playbackService =
         std::make_shared<cwp::infrastructure::FilePlaybackService>();
-
-    // Seed demo tracks so the radar has visible targets on first launch.
-    seedDemoTracks(*trackRepository);
+    auto sectorService =
+        std::make_shared<cwp::infrastructure::PolygonSectorBoundaryService>(k_sectorVertices);
 
     // ── Application ─────────────────────────────────────────────────────────
-    // Presenters are wired after MainWindow is constructed (resolves circular dep).
+    auto seedUseCase =
+        std::make_shared<cwp::application::SeedDemoTracksUseCase>(
+            trackRepository, sectorService);
+    
+    auto simulateMovementUseCase =
+        std::make_shared<cwp::application::SimulateTrackMovementUseCase>(
+            trackRepository, sectorService);
+    
     auto displayUseCase =
         std::make_shared<cwp::application::DisplayTrackUseCase>(
             trackRepository, /*presenter=*/nullptr);
@@ -129,6 +85,9 @@ int main(int argc, char* argv[])
     auto staleMonitorUseCase =
         std::make_shared<cwp::application::MonitorStaleTracksUseCase>(
             trackRepository, /*presenter=*/nullptr);
+
+    // Seed demo tracks so the radar has visible targets on first launch
+    seedUseCase->execute();
 
     // ── Presentation ────────────────────────────────────────────────────────
     cwp::ui::MainWindow mainWindow{displayUseCase, staleMonitorUseCase, playbackService};
@@ -139,21 +98,20 @@ int main(int argc, char* argv[])
         &mainWindow, [](cwp::domain::ITrackPresenter*) {});
 
     displayUseCase->setPresenter(presenterHandle);
-
-    // Wire the stale monitor presenter via setPresenter (no reconstruction needed).
     staleMonitorUseCase->setPresenter(presenterHandle);
 
     mainWindow.show();
 
     // ── Simulation feed ──────────────────────────────────────────────────────
-    // Advances each demo track along its heading every 4 seconds and resets
-    // its timestamp, mimicking a real surveillance return. Without this the
-    // MonitorStaleTracksUseCase (correctly) evicts tracks after 60 s.
-    constexpr int    k_simIntervalMs = 4000;
+    // Advances each demo track along its heading every 1 second and resets
+    // its timestamp, mimicking a real surveillance return.
+    constexpr int    k_simIntervalMs = 1000;  // Update every second
     constexpr double k_simIntervalS  = k_simIntervalMs / 1000.0;
+    constexpr double k_speedMultiplier = 5.0;  // Make movement more visible
+    
     QTimer simTimer;
     QObject::connect(&simTimer, &QTimer::timeout, [&] {
-        advanceTracks(*trackRepository, k_simIntervalS);
+        simulateMovementUseCase->execute(k_simIntervalS * k_speedMultiplier);
     });
     simTimer.start(k_simIntervalMs);
 

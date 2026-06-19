@@ -1,5 +1,6 @@
 #include "application/use_cases/DisplayTrackUseCase.hpp"
 
+#include <stdexcept>
 #include <utility>
 
 namespace cwp::application {
@@ -9,7 +10,11 @@ DisplayTrackUseCase::DisplayTrackUseCase(
     std::shared_ptr<domain::ITrackPresenter>  presenter)
     : m_repository{std::move(repository)}
     , m_presenter{std::move(presenter)}
-{}
+{
+    if (!m_repository) {
+        throw std::invalid_argument("DisplayTrackUseCase: repository must not be null");
+    }
+}
 
 void DisplayTrackUseCase::setPresenter(std::shared_ptr<domain::ITrackPresenter> presenter)
 {

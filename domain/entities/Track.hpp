@@ -111,12 +111,22 @@ public:
         std::chrono::system_clock::time_point now  = std::chrono::system_clock::now()
     ) const noexcept;
 
+    /// @return True if the track is currently inside the controlled airspace sector.
+    [[nodiscard]] bool isInsideSector() const noexcept;
+
+    /**
+     * @brief Updates whether this track is inside the controlled sector.
+     * @param inside True if inside the sector boundary, false if outside.
+     */
+    void setInsideSector(bool inside) noexcept;
+
 private:
     TrackId                               m_id;
     Position                              m_position;
     Velocity                              m_velocity;
     std::chrono::system_clock::time_point m_timestamp;
     std::optional<std::string>            m_callsign;
+    bool                                  m_insideSector{true}; ///< Track inside controlled airspace.
 };
 
 } // namespace cwp::domain

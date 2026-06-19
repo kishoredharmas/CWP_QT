@@ -11,34 +11,23 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPen>
+#include <QPolygonF>
 #include <QRectF>
 
 namespace cwp::ui {
-
-// ── Colour palette — 8 distinct ATC-style hues ───────────────────────────────
-const std::array<QColor, 8> RadarView::k_trackColours{{
-    QColor{0,   255, 128},   // emerald green
-    QColor{0,   200, 255},   // cyan
-    QColor{255, 220,   0},   // amber
-    QColor{255, 100, 100},   // soft red
-    QColor{180, 130, 255},   // lavender
-    QColor{ 80, 220,  80},   // lime
-    QColor{255, 170,  50},   // orange
-    QColor{100, 200, 255},   // sky blue
-}};
 
 RadarView::RadarView(QWidget* parent)
     : QWidget{parent}
 {
     setMinimumSize(800, 600);
-    setStyleSheet(QStringLiteral("background-color: #080d08;"));
-    setMouseTracking(true); // receive mouseMoveEvent even without button held
+    setStyleSheet(QStringLiteral("background-color: #2a2a2a;"));
+    setMouseTracking(true);
 }
 
 void RadarView::updateTracks(std::vector<std::shared_ptr<domain::Track>> tracks)
 {
     m_tracks = std::move(tracks);
-    // Reset hover if the hovered track was removed.
+    updateTrails();
     if (m_hoveredIndex && *m_hoveredIndex >= m_tracks.size()) {
         m_hoveredIndex.reset();
     }
@@ -91,23 +80,33 @@ void RadarView::paintEvent(QPaintEvent* /*event*/)
     QPainter painter{this};
     painter.setRenderHint(QPainter::Antialiasing);
 
-    drawRangeRings(painter);
+    drawBackground(painter);
+    drawSector(painter);
+    drawRoutes(painter);
 
-    // First pass: draw all non-hovered tracks.
-    for (std::size_t i = 0; i < m_tracks.size(); ++i) {
-        if (m_hoveredIndex && *m_hoveredIndex == i) {
-            continue;
+    // Draw trails for all aircraft
+    for (const auto& track : m_tracks) {
+        const auto trailIt = m_trails.find(track->id());
+        if (trailIt != m_trails.end()) {
+            drawTrail(painter, trailIt->second, track->isInsideSector());
         }
-        drawTrack(painter, *m_tracks[i], colourForIndex(i), /*hovered=*/false);
     }
 
-    // Second pass: draw the hovered track and its tooltip on top of everything.
+    // Draw aircraft and labels with collision avoidance
+    std::vector<QRectF> occupiedRects;
+    for (std::size_t i = 0; i < m_tracks.size(); ++i) {
+        const auto& track = m_tracks[i];
+        const QPointF pos = project(track->position());
+        const bool hovered = (m_hoveredIndex && *m_hoveredIndex == i);
+        
+        drawAircraft(painter, *track, pos, hovered);
+        drawLabel(painter, *track, pos, occupiedRects, occupiedRects);
+    }
+
+    // Draw hover tooltip on top
     if (m_hoveredIndex) {
-        const std::size_t i = *m_hoveredIndex;
-        const QColor colour = colourForIndex(i);
-        drawTrack(painter, *m_tracks[i], colour, /*hovered=*/true);
-        drawHoverTooltip(painter, *m_tracks[i],
-                         project(m_tracks[i]->position()), colour);
+        const auto& track = m_tracks[*m_hoveredIndex];
+        drawHoverTooltip(painter, *track, project(track->position()));
     }
 }
 
@@ -119,54 +118,219 @@ QPointF RadarView::project(const domain::Position& position) const
             static_cast<double>(height()) / 2.0 + dy};
 }
 
-QColor RadarView::colourForIndex(std::size_t index) const
+void RadarView::drawBackground(QPainter& painter) const
 {
-    return k_trackColours[index % k_trackColours.size()];
+    painter.fillRect(rect(), QColor{42, 42, 42});
 }
 
-void RadarView::drawRangeRings(QPainter& painter) const
+void RadarView::drawSector(QPainter& painter) const
 {
-    painter.setPen(QPen{QColor{0, 55, 0}, 1, Qt::DotLine});
-    const QPointF centre{static_cast<double>(width())  / 2.0,
-                         static_cast<double>(height()) / 2.0};
-    for (int ring = 1; ring <= k_rangeRingCount; ++ring) {
-        const double radius = ring * k_scalePixPerDeg * 2.0;
-        painter.drawEllipse(centre, radius, radius);
+    // Draw much larger irregular sector polygon (control airspace boundary)
+    QPolygonF sector;
+    sector << project(domain::Position{47.0, -5.0, 0})
+           << project(domain::Position{54.0, -4.0, 0})
+           << project(domain::Position{56.0,  4.0, 0})
+           << project(domain::Position{54.5,  6.0, 0})
+           << project(domain::Position{48.0,  5.0, 0})
+           << project(domain::Position{46.0, -3.0, 0});
+    
+    painter.setBrush(QColor{0, 0, 0});
+    painter.setPen(QPen{QColor{60, 60, 60}, 0.8});
+    painter.drawPolygon(sector);
+}
+
+void RadarView::drawRoutes(QPainter& painter) const
+{
+    // Draw thin grey lines representing air routes across larger sector
+    painter.setPen(QPen{QColor{70, 70, 70}, 0.5, Qt::SolidLine});
+    
+    // Route 1: Northwest-Southeast
+    painter.drawLine(
+        project(domain::Position{56.0, -4.0, 0}),
+        project(domain::Position{47.0,  5.0, 0})
+    );
+    
+    // Route 2: Northeast-Southwest
+    painter.drawLine(
+        project(domain::Position{56.0,  4.0, 0}),
+        project(domain::Position{47.0, -4.0, 0})
+    );
+    
+    // Route 3: Horizontal
+    painter.drawLine(
+        project(domain::Position{51.5, -5.0, 0}),
+        project(domain::Position{51.5,  6.0, 0})
+    );
+    
+    // Route 4: Vertical
+    painter.drawLine(
+        project(domain::Position{46.0,  0.0, 0}),
+        project(domain::Position{56.0,  0.0, 0})
+    );
+}
+
+void RadarView::drawTrail(QPainter& painter, const TrailHistory& trail,
+                          bool isInsideSector) const
+{
+    if (trail.positions.empty()) {
+        return;
+    }
+    
+    // Choose color based on sector status: white inside, grey outside
+    const QColor trailColor = isInsideSector 
+        ? QColor{200, 200, 200}  // White for inside sector
+        : QColor{100, 100, 100}; // Darker grey for outside sector
+    
+    // Draw distinct dots at each trail position
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(trailColor);
+    
+    for (const auto& position : trail.positions) {
+        // Project geographic position to screen coordinates
+        const QPointF screenPos = project(position);
+        painter.drawEllipse(screenPos, k_trailDotRadius, k_trailDotRadius);
     }
 }
 
-void RadarView::drawTrack(QPainter& painter, const domain::Track& track,
-                          QColor colour, bool hovered) const
+void RadarView::drawAircraft(QPainter& painter, const domain::Track& track,
+                             const QPointF& pos, bool hovered) const
 {
-    const QPointF pos = project(track.position());
-    const auto    hs  = static_cast<double>(hovered ? k_symbolHalfSize + 3
-                                                     : k_symbolHalfSize);
+    // Choose color based on sector status: green inside, grey outside
+    const QColor vectorColor = track.isInsideSector() 
+        ? QColor{0, 255, 100}   // Green for inside sector
+        : QColor{120, 120, 120}; // Grey for outside sector
+    
+    // Draw white dot for aircraft
+    const int radius = hovered ? k_dotRadius + 2 : k_dotRadius;
+    painter.setBrush(QColor{255, 255, 255});
+    painter.setPen(Qt::NoPen);
+    painter.drawEllipse(pos, radius, radius);
+    
+    // Draw velocity vector with appropriate color
+    const double heading = track.velocity().heading() * M_PI / 180.0;
+    const double speed = track.velocity().speed();
+    const double vectorLen = k_vectorLength * (speed / 500.0); // Scale by speed
+    
+    const QPointF vectorEnd{
+        pos.x() + vectorLen * std::sin(heading),
+        pos.y() - vectorLen * std::cos(heading)
+    };
+    
+    painter.setPen(QPen{vectorColor, hovered ? 1.5 : 1.0});
+    painter.drawLine(pos, vectorEnd);
+}
 
-    // Cross symbol — brighter and larger when hovered.
-    painter.setPen(QPen{colour, hovered ? 2.5 : 2.0});
-    painter.drawLine(QPointF{pos.x() - hs, pos.y()},
-                     QPointF{pos.x() + hs, pos.y()});
-    painter.drawLine(QPointF{pos.x(), pos.y() - hs},
-                     QPointF{pos.x(), pos.y() + hs});
-
-    // Compact label (always visible, small).
+void RadarView::drawLabel(QPainter& painter, const domain::Track& track,
+                          const QPointF& pos, const std::vector<QRectF>& occupiedRects,
+                          std::vector<QRectF>& newOccupiedRects) const
+{
+    // Choose color based on sector status: green inside, grey outside
+    const QColor labelColor = track.isInsideSector() 
+        ? QColor{0, 255, 100}   // Green for inside sector
+        : QColor{120, 120, 120}; // Grey for outside sector
+    
     const QString callsign = track.callsign().has_value()
         ? QString::fromStdString(*track.callsign())
         : QStringLiteral("????");
+    
+    const int flightLevel = track.position().altitude() / 100;
+    const QString flStr = QString::number(flightLevel);
+    
+    // Use thinner, sharper font (no bold, smaller size)
+    painter.setFont(QFont{QStringLiteral("Monospace"), 8, QFont::Normal});
+    const QFontMetrics fm{painter.font()};
+    
+    // Calculate label dimensions
+    const int callsignWidth = fm.horizontalAdvance(callsign);
+    const int flWidth = fm.horizontalAdvance(flStr);
+    const int maxWidth = std::max(callsignWidth, flWidth);
+    const int lineHeight = fm.height();
+    const int totalHeight = lineHeight * 2;
+    
+    // Initial label position (further from aircraft for leader line)
+    QRectF labelRect{pos.x() + 25, pos.y() - lineHeight, 
+                     static_cast<double>(maxWidth + 4), static_cast<double>(totalHeight)};
+    
+    // Calculate heading for perpendicular positioning
+    const double heading = track.velocity().heading() * M_PI / 180.0;
+    
+    // Find non-overlapping position, prioritizing perpendicular to velocity vector
+    QPointF adjustedPos = findNonOverlappingPosition(pos, labelRect, occupiedRects, heading);
+    labelRect.moveTo(adjustedPos);
+    
+    // Draw thin leader line from aircraft center to label with appropriate color
+    QPointF labelCenter{adjustedPos.x() + labelRect.width() / 2, 
+                        adjustedPos.y() + totalHeight / 2};
+    painter.setPen(QPen{labelColor, 0.8});
+    painter.drawLine(pos, labelCenter);
+    
+    // Draw labels with thin pen
+    painter.setPen(QPen{labelColor, 0.5});
+    painter.drawText(QPointF{adjustedPos.x(), adjustedPos.y() + lineHeight - 2}, callsign);
+    painter.drawText(QPointF{adjustedPos.x(), adjustedPos.y() + lineHeight * 2 - 2}, flStr);
+    
+    // Add this label's rect to occupied list
+    newOccupiedRects.push_back(labelRect);
+}
 
-    const QString label =
-        QStringLiteral("%1\nFL%2 %3kt")
-            .arg(callsign)
-            .arg(track.position().altitude() / 100)
-            .arg(static_cast<int>(track.velocity().speed()));
-
-    painter.setPen(colour);
-    painter.setFont(QFont{QStringLiteral("Monospace"), 8});
-    painter.drawText(QPointF{pos.x() + hs + 4.0, pos.y() - 2.0}, label);
+QPointF RadarView::findNonOverlappingPosition(
+    const QPointF& aircraftPos,
+    const QRectF& labelRect,
+    const std::vector<QRectF>& occupiedRects,
+    double headingRadians) const
+{
+    // Calculate perpendicular directions (90° left and right from heading)
+    // Perpendicular right: heading + 90° = heading + π/2
+    // Perpendicular left: heading - 90° = heading - π/2
+    const double perpRight = headingRadians + M_PI / 2.0;
+    const double perpLeft = headingRadians - M_PI / 2.0;
+    const double distance = 30.0;
+    
+    // Priority: perpendicular positions first, then other positions
+    // Perpendicular right and left are calculated based on actual heading
+    const std::vector<QPointF> candidateOffsets = {
+        // Perpendicular positions (priority)
+        {distance * std::sin(perpRight), -distance * std::cos(perpRight) - labelRect.height() / 2},  // perpendicular right
+        {distance * std::sin(perpLeft) - labelRect.width(), -distance * std::cos(perpLeft) - labelRect.height() / 2},   // perpendicular left
+        
+        // Fallback positions
+        {25, -labelRect.height() / 2},          // right
+        {-labelRect.width() - 25, -labelRect.height() / 2}, // left
+        {30, -labelRect.height() - 10},         // top-right
+        {30, 10},                                // bottom-right
+        {-labelRect.width() - 30, -labelRect.height() - 10}, // top-left
+        {-labelRect.width() - 30, 10},          // bottom-left
+        {-labelRect.width() / 2, -labelRect.height() - 25}, // top
+        {-labelRect.width() / 2, 25}            // bottom
+    };
+    
+    for (const auto& offset : candidateOffsets) {
+        QPointF candidate = aircraftPos + offset;
+        QRectF testRect = labelRect;
+        testRect.moveTo(candidate);
+        
+        // Check if this position overlaps with any occupied rect
+        bool overlaps = false;
+        for (const auto& occupied : occupiedRects) {
+            if (testRect.intersects(occupied)) {
+                overlaps = true;
+                break;
+            }
+        }
+        
+        // Also check if within screen bounds
+        if (!overlaps && testRect.left() >= 0 && testRect.right() < width() &&
+            testRect.top() >= 0 && testRect.bottom() < height()) {
+            return candidate;
+        }
+    }
+    
+    // If all positions are occupied, return default (right position)
+    return aircraftPos + candidateOffsets[0];
 }
 
 void RadarView::drawHoverTooltip(QPainter& painter, const domain::Track& track,
-                                 QPointF screenPos, QColor colour) const
+                                 QPointF screenPos) const
 {
     const QString callsign = track.callsign().has_value()
         ? QString::fromStdString(*track.callsign())
@@ -185,7 +349,7 @@ void RadarView::drawHoverTooltip(QPainter& painter, const domain::Track& track,
             .arg(track.position().latitude(),  0, 'f', 3)
             .arg(track.position().longitude(), 0, 'f', 3);
 
-    const QFont font{QStringLiteral("Monospace"), 10, QFont::Bold};
+    const QFont font{QStringLiteral("Monospace"), 9, QFont::Normal};
     painter.setFont(font);
     const QFontMetrics fm{font};
     const QRectF textBounds = fm.boundingRect(
@@ -193,8 +357,7 @@ void RadarView::drawHoverTooltip(QPainter& painter, const domain::Track& track,
         Qt::AlignLeft | Qt::TextWordWrap,
         text).adjusted(-8, -6, 8, 6);
 
-    // Position the tooltip to the right of the symbol; flip left if near edge.
-    constexpr double k_offset = 16.0;
+    constexpr double k_offset = 20.0;
     double tx = screenPos.x() + k_offset;
     double ty = screenPos.y() - textBounds.height() / 2.0;
 
@@ -205,14 +368,42 @@ void RadarView::drawHoverTooltip(QPainter& painter, const domain::Track& track,
 
     const QRectF box{tx, ty, textBounds.width(), textBounds.height()};
 
-    // Semi-transparent background so the tooltip never covers other labels.
-    painter.setBrush(QColor{0, 0, 0, 200});
-    painter.setPen(QPen{colour, 1});
+    painter.setBrush(QColor{0, 0, 0, 220});
+    painter.setPen(QPen{QColor{0, 255, 100}, 1.0});
     painter.drawRoundedRect(box, 4, 4);
 
-    painter.setPen(colour);
+    painter.setPen(QPen{QColor{0, 255, 100}, 0.5});
     painter.drawText(box.adjusted(8, 6, -8, -6),
                      Qt::AlignLeft | Qt::TextWordWrap, text);
+}
+
+void RadarView::updateTrails()
+{
+    for (const auto& track : m_tracks) {
+        auto& trail = m_trails[track->id()];
+        const auto& currentPos = track->position();
+        
+        // Add current geographic position to trail
+        // Check distance in geographic coordinates to avoid adding duplicate points
+        if (trail.positions.empty()) {
+            trail.positions.push_back(currentPos);
+        } else {
+            const auto& lastPos = trail.positions.back();
+            const double latDiff = currentPos.latitude() - lastPos.latitude();
+            const double lonDiff = currentPos.longitude() - lastPos.longitude();
+            const double distance = std::sqrt(latDiff * latDiff + lonDiff * lonDiff);
+            
+            // Only add if moved significantly (0.045 degrees ~= 5km for distinct dots)
+            if (distance > 0.045) {
+                trail.positions.push_back(currentPos);
+                
+                // Limit trail length
+                if (trail.positions.size() > k_maxTrailPoints) {
+                    trail.positions.pop_front();
+                }
+            }
+        }
+    }
 }
 
 } // namespace cwp::ui

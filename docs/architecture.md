@@ -337,15 +337,15 @@ sequenceDiagram
 graph LR
     subgraph Workstation["Controller Workstation (Linux x86-64)"]
         APP[cwp_qt process]
-        FS[(cwp_tracks.json\nrecordings/)]
-        CFG[config/\nConfiguration.hpp]
+        FS[(cwp_tracks.json recordings/)]
+        CFG[config/ Configuration.hpp]
     end
 
     subgraph Radar["Radar Data Source (Future)"]
         ASTERIX[ASTERIX Cat-48 feed]
     end
 
-    ASTERIX -.->|UDP multicast\n(not yet implemented)| APP
+    ASTERIX -.->|UDP multicast (not yet implemented)| APP
     APP <-->|read/write| FS
     APP -->|compile-time| CFG
 ```
